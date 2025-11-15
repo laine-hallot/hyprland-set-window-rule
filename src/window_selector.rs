@@ -20,17 +20,22 @@ use wayland_protocols_wlr::layer_shell::{
     v1::client::zwlr_layer_surface_v1,
 };
 
+struct DisplayMode {
+    width: i32,
+    height: i32,
+}
+
 struct State {
     running: bool,
     base_surface: Option<wl_surface::WlSurface>,
     buffer: Option<wl_buffer::WlBuffer>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
-    xdg_surface: Option<(xdg_surface::XdgSurface, xdg_toplevel::XdgToplevel)>,
-    configured: bool,
     cursor_shape_manager: Option<wp_cursor_shape_manager_v1::WpCursorShapeManagerV1>,
     layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     wlr_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
     output: Option<wl_output::WlOutput>,
+    has_init_wlr: bool,
+    display_mode: Option<DisplayMode>,
 }
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
     fn event(
@@ -51,10 +56,6 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                         registry.bind::<wl_compositor::WlCompositor, _, _>(name, 1, qh, ());
                     let surface = compositor.create_surface(qh, ());
                     state.base_surface = Some(surface);
-
-                    if state.wm_base.is_some() && state.xdg_surface.is_none() {
-                        //state.init_xdg_surface(qh);
-                    }
                 }
                 "wl_shm" => {
                     let shm = registry.bind::<wl_shm::WlShm, _, _>(name, 1, qh, ());
@@ -75,7 +76,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                     );
                     state.buffer = Some(buffer.clone());
 
-                    /*  if state.configured {
+                    /* if state.configured {
                         let surface = state.base_surface.as_ref().unwrap();
                         surface.attach(Some(&buffer), 0, 0);
                         surface.commit();
@@ -98,7 +99,6 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                     state.cursor_shape_manager = Some(manager)
                 }
                 "wp_cursor_shape_device_v1" => {
-                    println!("bind: wp_cursor_shape_device_v1");
                     registry.bind::<wp_cursor_shape_device_v1::WpCursorShapeDeviceV1, _, _>(
                         name,
                         1,
@@ -109,17 +109,10 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                 "xdg_wm_base" => {
                     let wm_base = registry.bind::<xdg_wm_base::XdgWmBase, _, _>(name, 1, qh, ());
                     state.wm_base = Some(wm_base);
-                    /*
-                    if state.base_surface.is_some() && state.xdg_surface.is_none() {
-                        state.init_xdg_surface(qh);
-                    } */
                 }
                 "wl_output" => {
                     let output = registry.bind::<wl_output::WlOutput, _, _>(name, 1, qh, ());
-                    dbg!(&output);
-
                     state.output = Some(output);
-                    state.init_wlr_surface(qh);
                 }
                 "zwlr_layer_shell_v1" => {
                     let zwlr_layer = registry.bind::<zwlr_layer_shell_v1::ZwlrLayerShellV1, _, _>(
@@ -128,27 +121,26 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                         qh,
                         (),
                     );
+                    println!("created layer_shell");
+                    state.layer_shell = Some(zwlr_layer);
 
-                    if state.base_surface.is_some() {
-                        let surface = state.base_surface.as_ref().unwrap();
-                        let output = state.output.as_ref();
-                        println!("create layer_shell");
+                    let zwlr_layer = state.layer_shell.as_ref().unwrap();
+                    let base_surface = state.base_surface.as_ref().unwrap();
 
-                        state.wlr_surface = Some(zwlr_layer.get_layer_surface(
-                            surface,
-                            output,
-                            Layer::Top,
-                            "selection".to_string(),
-                            &qh,
-                            (),
-                        ));
-                        state.layer_shell = Some(zwlr_layer);
-
-                        //state.init_wlr_surface(qh);
-                    }
+                    state.wlr_surface = Some(zwlr_layer.get_layer_surface(
+                        base_surface,
+                        state.output.as_ref(),
+                        Layer::Overlay,
+                        "selection".to_string(),
+                        &qh,
+                        (),
+                    ));
+                    state.init_wlr_surface();
+                    //base_surface.commit();
                 }
                 "zwlr_layer_surface_v1" => {
-                    let output = registry.bind::<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, _, _>(
+                    println!("zwlr_layer_surface_v1");
+                    registry.bind::<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, _, _>(
                         name,
                         1,
                         qh,
@@ -167,13 +159,14 @@ delegate_noop!(State: ignore wl_surface::WlSurface);
 delegate_noop!(State: ignore wl_shm::WlShm);
 delegate_noop!(State: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(State: ignore wl_buffer::WlBuffer);
+delegate_noop!(State: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 
 fn draw(tmp: &mut File, (buf_x, buf_y): (u32, u32)) {
     use std::{cmp::min, io::Write};
     let mut buf = std::io::BufWriter::new(tmp);
     for y in 0..buf_y {
         for x in 0..buf_x {
-            let a = 0xFF;
+            let a = 0xEE;
             let r = min(((buf_x - x) * 0xFF) / buf_x, ((buf_y - y) * 0xFF) / buf_y);
             let g = min((x * 0xFF) / buf_x, ((buf_y - y) * 0xFF) / buf_y);
             let b = min(((buf_x - x) * 0xFF) / buf_x, (y * 0xFF) / buf_y);
@@ -184,52 +177,55 @@ fn draw(tmp: &mut File, (buf_x, buf_y): (u32, u32)) {
     buf.flush().unwrap();
 }
 
-/* impl State {
-    fn init_xdg_surface(&mut self, qh: &QueueHandle<State>) {
-        let wm_base = self.wm_base.as_ref().unwrap();
-        let base_surface = self.base_surface.as_ref().unwrap();
-
-        let xdg_surface = wm_base.get_xdg_surface(base_surface, qh, ());
-        let toplevel = xdg_surface.get_toplevel(qh, ());
-        toplevel.set_title("A fantastic window!".into());
-
-        base_surface.commit();
-
-        self.xdg_surface = Some((xdg_surface, toplevel));
-    }
-}
- */
 impl State {
-    fn init_wlr_surface(&mut self, _qh: &QueueHandle<State>) {
-        //let wm_base = self.wm_base.as_ref().unwrap();
-        let wlr_layer_shell = self.layer_shell.as_ref().unwrap();
-        let wlr_surface = self.wlr_surface.as_ref().unwrap();
-        let base_surface = self.base_surface.as_ref().unwrap();
-        let buffer = self.buffer.as_ref();
+    fn init_wlr_surface(&mut self) {
+        if !self.has_init_wlr {
+            println!("init_wlr_surface");
+            let wlr_surface = self.wlr_surface.as_ref().unwrap();
+            let base_surface = self.base_surface.as_ref().unwrap();
 
-        wlr_surface.set_size(400, 400);
-        wlr_surface.set_anchor(zwlr_layer_surface_v1::Anchor::Top);
-        wlr_surface.set_anchor(zwlr_layer_surface_v1::Anchor::Left);
+            wlr_surface.set_size(300, 200);
+            wlr_surface.set_anchor(zwlr_layer_surface_v1::Anchor::Top);
+            wlr_surface.set_anchor(zwlr_layer_surface_v1::Anchor::Left);
+            wlr_surface.set_exclusive_zone(0);
 
-        //wlr_surface.set_layer(wlr_layer_shell);
-
-        //base_surface.attach(buffer, 0, 0);
-        //base_surface.commit();
-
-        //self.xdg_surface = Some((xdg_surface, toplevel));
+            base_surface.commit();
+            self.has_init_wlr = true;
+        }
     }
 }
 
 impl Dispatch<wl_output::WlOutput, ()> for State {
     fn event(
         state: &mut Self,
-        proxy: &wl_output::WlOutput,
-        event: <wl_output::WlOutput as Proxy>::Event,
-        data: &(),
-        conn: &Connection,
-        qhandle: &QueueHandle<Self>,
+        _: &wl_output::WlOutput,
+        event: wl_output::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
     ) {
-        println!("Dispatch - WlOutput")
+        match event {
+            wl_output::Event::Description { description } => {
+                println!("Description: {}", description)
+            }
+            wl_output::Event::Done => println!("Done"),
+            geometry @ wl_output::Event::Geometry { .. } => println!("Geometry, {:#?}", geometry),
+            mode @ wl_output::Event::Mode { width, height, .. } => {
+                println!("Mode, {:#?}", mode);
+
+                if let Some(ref buffer) = state.buffer {
+                    let base_surface = state.base_surface.as_ref().unwrap();
+
+                    println!("committing first actual draw");
+                    base_surface.attach(Some(buffer), width, height);
+                    base_surface.commit();
+                }
+                state.display_mode = Some(DisplayMode { width, height });
+            }
+            wl_output::Event::Name { name } => println!("Name, {name}"),
+            wl_output::Event::Scale { factor } => println!("Scale, {factor}"),
+            _ => (),
+        }
     }
 }
 
@@ -242,29 +238,12 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let xdg_wm_base::Event::Ping { serial } = event {
-            wm_base.pong(serial);
-        }
-    }
-}
-
-impl Dispatch<xdg_surface::XdgSurface, ()> for State {
-    fn event(
-        state: &mut Self,
-        xdg_surface: &xdg_surface::XdgSurface,
-        event: xdg_surface::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        if let xdg_surface::Event::Configure { serial, .. } = event {
-            xdg_surface.ack_configure(serial);
-            state.configured = true;
-            let surface = state.base_surface.as_ref().unwrap();
-            if let Some(ref buffer) = state.buffer {
-                surface.attach(Some(buffer), 0, 0);
-                surface.commit();
+        println!("XdgWmBase");
+        match event {
+            xdg_wm_base::Event::Ping { serial } => {
+                wm_base.pong(serial);
             }
+            _ => (),
         }
     }
 }
@@ -293,17 +272,19 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_seat::Event::Capabilities {
-            capabilities: WEnum::Value(capabilities),
-        } = event
-        {
-            if capabilities.contains(wl_seat::Capability::Keyboard) {
-                seat.get_keyboard(qh, ());
+        match event {
+            wl_seat::Event::Capabilities {
+                capabilities: WEnum::Value(capabilities),
+            } => {
+                if capabilities.contains(wl_seat::Capability::Keyboard) {
+                    seat.get_keyboard(qh, ());
+                }
+                if capabilities.contains(wl_seat::Capability::Pointer) {
+                    seat.get_pointer(qh, ());
+                }
             }
-            if capabilities.contains(wl_seat::Capability::Pointer) {
-                seat.get_pointer(qh, ());
-            }
-        }
+            _ => (),
+        };
     }
 }
 
@@ -313,7 +294,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         pointer: &wl_pointer::WlPointer,
         event: wl_pointer::Event,
         _: &(),
-        _conection: &Connection,
+        _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
         if let wl_pointer::Event::Enter {
@@ -324,7 +305,6 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         } = event
         {
             println!("Pointer entered surface");
-            dbg!(&state.cursor_shape_manager);
             let device = wp_cursor_shape_manager_v1::WpCursorShapeManagerV1::get_pointer(
                 &state
                     .cursor_shape_manager
@@ -345,27 +325,27 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
 
 impl Dispatch<wp_cursor_shape_manager_v1::WpCursorShapeManagerV1, ()> for State {
     fn event(
-        _state: &mut Self,
-        _proxy: &wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
-        _event: <wp_cursor_shape_manager_v1::WpCursorShapeManagerV1 as Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
+        _: &mut Self,
+        _: &wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
+        _: wp_cursor_shape_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
     ) {
-        println!("asdf");
+        println!("WpCursorShapeManagerV1");
     }
 }
 
 impl Dispatch<wp_cursor_shape_device_v1::WpCursorShapeDeviceV1, ()> for State {
     fn event(
-        _state: &mut Self,
-        _proxy: &wp_cursor_shape_device_v1::WpCursorShapeDeviceV1,
-        _event: <wp_cursor_shape_device_v1::WpCursorShapeDeviceV1 as Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
+        _: &mut Self,
+        _: &wp_cursor_shape_device_v1::WpCursorShapeDeviceV1,
+        _: wp_cursor_shape_device_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
     ) {
-        println!("asdf");
+        println!("WpCursorShapeDeviceV1");
     }
 }
 
@@ -387,30 +367,37 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
     }
 }
 
-impl Dispatch<zwlr_layer_shell_v1::ZwlrLayerShellV1, ()> for State {
-    fn event(
-        _state: &mut Self,
-        _proxy: &zwlr_layer_shell_v1::ZwlrLayerShellV1,
-        _event: <zwlr_layer_shell_v1::ZwlrLayerShellV1 as Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
-    ) {
-        todo!()
-    }
-}
-
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for State {
     fn event(
-        _state: &mut Self,
-        _proxy: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
-        _event: <zwlr_layer_surface_v1::ZwlrLayerSurfaceV1 as Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
+        state: &mut Self,
+        layer_surface: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
     ) {
-        println!("ZwlrLayerSurfaceV1");
-        todo!()
+        match event {
+            conf @ zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } => {
+                dbg!(&conf);
+                let base_surface = state.base_surface.as_ref().unwrap();
+                if state.display_mode.is_some() {
+                    let display_mode = state.display_mode.as_ref().unwrap();
+
+                    layer_surface.set_size(display_mode.width as u32, display_mode.height as u32);
+                } else {
+                    layer_surface.set_size(width, height);
+                }
+
+                base_surface.commit();
+                layer_surface.ack_configure(serial);
+            }
+            zwlr_layer_surface_v1::Event::Closed => todo!(),
+            _ => todo!(),
+        };
     }
 }
 
@@ -428,12 +415,12 @@ pub fn create_window() -> () {
         base_surface: None,
         buffer: None,
         wm_base: None,
-        xdg_surface: None,
-        configured: false,
         cursor_shape_manager: None,
         layer_shell: None,
         wlr_surface: None,
         output: None,
+        has_init_wlr: false,
+        display_mode: None,
     };
 
     println!("Starting the example window app, press <ESC> to quit.");
