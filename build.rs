@@ -1,3 +1,4 @@
+// TODO: Deal with this is copy pasted Ratatui boilerplate
 fn main() {
     let git_output = std::process::Command::new("git")
         .args(["rev-parse", "--git-dir"])

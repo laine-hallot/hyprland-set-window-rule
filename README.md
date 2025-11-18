@@ -1,6 +1,8 @@
 ## Dependencies
 
-1. `slurp` - https://github.com/emersion/slurp/
+1. rust
+1. A wlroots compatible compositor
+1. Probably some wayland related header packages that I forgot about
 
 ## Install
 
@@ -18,4 +20,4 @@ This is very unfinished so right now you can only generate a rule to make a wind
 
 ## Know Issues
 
-The mouse selection is a little finicky since it relies on slurp, which means it really easy to select a region instead of a window. Just go slow and make sure you don't drag your mouse at all while you click
+The window selection boxes appear lower than they should because the desktop status bar's effect on this program's surface positions isn't taken into account when calculating where to draw stuff.
