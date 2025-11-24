@@ -1,10 +1,8 @@
-use crate::wayland::buffer_surface::ClientRegion;
-
-use super::buffer_surface::{BaseSurfaceBuffer, BufferSurface, HasOutput, InProcess};
+use super::buffer_surface::{BaseSurfaceBuffer, BufferSurface, ClientRegion, HasOutput, InProcess};
 use super::protocols::State;
 
 use hyprland::data::{Client as HyClient, Clients as HyClients, Monitors as HyMonitors};
-use hyprland::shared::WorkspaceId;
+use hyprland::shared::{Address, WorkspaceId};
 use wayland_client::EventQueue;
 
 use std::collections::HashMap;
@@ -17,6 +15,156 @@ use wayland_protocols::wp::cursor_shape::v1::client::{
     wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1,
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
+
+#[derive(Debug)]
+pub enum Message {
+    Done,
+    HoveredClient(Option<Address>),
+}
+
+pub struct Running {
+    state: State,
+    event_queue: EventQueue<State>,
+    client_regions: Vec<ClientRegion>,
+    mapped_client_id_and_client: HashMap<Address, HyClient>,
+}
+
+pub enum Desu {
+    Running(Running),
+    Done,
+}
+
+pub struct WindowSelect {
+    pub stuff: Desu,
+}
+impl WindowSelect {
+    pub fn update(self: &mut Self) -> Message {
+        return match &mut self.stuff {
+            Desu::Running(stuff) => {
+                return update_running(
+                    &mut stuff.state,
+                    &mut stuff.event_queue,
+                    &mut stuff.client_regions,
+                    &mut stuff.mapped_client_id_and_client,
+                );
+            }
+            Desu::Done => Message::Done,
+        };
+    }
+    pub fn clean_up(self: &mut Self) {
+        match &mut self.stuff {
+            Desu::Running(stuff) => return clean_up_running(&mut stuff.state),
+            Desu::Done => {}
+        };
+        self.stuff = Desu::Done;
+    }
+    pub fn new(clients: HyClients, monitors: HyMonitors) -> Self {
+        let (wl_state, client_regions) = create_state_and_region_bounds(&clients, &monitors);
+        return Self {
+            stuff: Desu::Running(Running {
+                state: wl_state,
+                client_regions,
+                event_queue: create_wayland_window_select(),
+                mapped_client_id_and_client: index_client_id(&clients),
+            }),
+        };
+    }
+}
+
+fn index_client_id(clients: &HyClients) -> HashMap<Address, HyClient> {
+    return HashMap::<Address, HyClient>::from_iter(
+        clients
+            .iter()
+            .map(|client| (client.address.clone(), client.clone())),
+    );
+}
+
+fn update_running(
+    state: &mut State,
+    event_queue: &mut EventQueue<State>,
+    client_regions: &mut Vec<ClientRegion>,
+    mapped_client_id_and_client: &mut HashMap<Address, HyClient>,
+) -> Message {
+    if state.running {
+        event_queue.blocking_dispatch(state).expect("wayland loop");
+        if let (Some(pointer_position), Some((pointer_monitor_id, _))) =
+            (state.pointer_position, state.pointer_surface.clone())
+        {
+            let hovered_client_region = client_regions.iter().find(|client| {
+                let pointer_x = pointer_position.0.trunc() as i16;
+                let pointer_y = pointer_position.1.trunc() as i16;
+                let x = client.at.0 < pointer_x && pointer_x < (client.at.0 + client.size.0);
+                let y = client.at.1 < pointer_y && pointer_y < (client.at.1 + client.size.1);
+                if let Some(client_monitor) = &client.monitor {
+                    return x && y && client_monitor.to_string() == pointer_monitor_id;
+                }
+                return false;
+            });
+            let hovered_client = match hovered_client_region {
+                Some(hovered_client_region) => {
+                    mapped_client_id_and_client.get(&hovered_client_region.client_id)
+                }
+                None => None,
+            };
+            return match hovered_client {
+                Some(client) => Message::HoveredClient(Some(client.address.clone())),
+                None => Message::HoveredClient(None),
+            };
+        };
+        return Message::HoveredClient(None);
+    } else {
+        return Message::Done;
+    }
+}
+
+fn clean_up_running(state: &mut State) {
+    state
+        .buffer_surfaces
+        .iter_mut()
+        .for_each(|(_, bfs)| match bfs {
+            BufferSurface::Pre(pre) => {
+                pre.monitor_clients.clear();
+            }
+            BufferSurface::InProcess(in_process) => {
+                in_process.base_surface.destroy();
+                in_process.buffer.destroy();
+            }
+            BufferSurface::HasOutput(has_output) => {
+                has_output.wlr_surface.destroy();
+                has_output.base_surface.destroy();
+                has_output.buffer.destroy();
+                has_output.wayland_output.release();
+            }
+            BufferSurface::ReadyToDraw(ready_to_draw) => {
+                ready_to_draw.wlr_surface.destroy();
+                ready_to_draw.base_surface.destroy();
+                ready_to_draw.buffer.destroy();
+                ready_to_draw.wayland_output.release();
+            }
+        });
+
+    if let Some(shm) = &state.shm {
+        shm.release();
+    }
+    state.shm = None;
+
+    if let Some(cursor_shape_manager) = &state.cursor_shape_manager {
+        cursor_shape_manager.destroy();
+    }
+    state.cursor_shape_manager = None;
+
+    if let Some(layer_shell) = &state.layer_shell {
+        layer_shell.destroy();
+    }
+    state.layer_shell = None;
+
+    state.buffer_surfaces.clear();
+    state.compositor = None;
+
+    state.pointer_position = None;
+
+    state.pointer_surface = None;
+}
 
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
     fn event(
@@ -129,25 +277,8 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
         }
     }
 }
-/*
-fn cords_relative_to_surface((x, y): (i16, i16)) -> (i16, i16) {}
 
-fn is_inside_region((x_cord, y_cord): (i16, i16), client: ClientRegion) -> bool {
-    let x = client.at.0 < x_cord && x_cord < (client.at.0 + client.size.0);
-    let y = client.at.1 < y_cord && y_cord < (client.at.1 + client.size.1);
-
-    return x && y;
-}
-
-fn is_pixel_in_window_bounds((x_cord, y_cord): (i16, i16), client: ClientRegion) -> bool {
-    if let Some(client_monitor) = &client.monitor {
-        return is_inside_region((x_cord, y_cord), client)
-            && client_monitor.to_string() == pointer_monitor_id;
-    }
-    return false;
-} */
-
-pub fn create_state_and_region_bounds<'c>(
+fn create_state_and_region_bounds<'c>(
     clients: &'c HyClients,
     monitors: &HyMonitors,
 ) -> (State, Vec<ClientRegion>) {
@@ -226,7 +357,7 @@ pub fn create_state_and_region_bounds<'c>(
     );
 }
 
-pub fn create_wayland_window_select() -> EventQueue<State> {
+fn create_wayland_window_select() -> EventQueue<State> {
     let conn = Connection::connect_to_env().unwrap();
 
     let event_queue = conn.new_event_queue();

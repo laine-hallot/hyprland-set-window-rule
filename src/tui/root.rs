@@ -1,28 +1,59 @@
+use super::widgets::window_select::select_window;
+
+use crate::hyprland_config::SelectWindowBy;
+use crate::hyprland_config::WindowOptions;
 use crate::wayland;
-use crate::wayland::ClientRegion;
-use crate::wayland::State as WlState;
+use crate::wayland::window_selector::Message;
+
 use hyprland::data::*;
 use hyprland::prelude::*;
-use hyprland::shared::Address;
-use ratatui::prelude::*;
-use std::collections::HashMap;
-use wayland_client::EventQueue;
+use ratatui::crossterm::event;
+use ratatui::crossterm::event::Event;
+use ratatui::crossterm::event::KeyCode;
+use std::rc::Rc;
+use std::time::Duration;
 
 use color_eyre::Result;
-use ratatui::{Frame, widgets::Paragraph};
+use ratatui::Frame;
 
-#[derive(Debug, Default)]
-enum ViewState {
+#[derive(Debug, Default, PartialEq)]
+enum PageState {
     #[default]
     WindowSelect,
 }
 
-#[derive(Debug, Default)]
+pub enum OrPrompt<T> {
+    Args(T),
+    Prompt,
+}
+
 struct Model {
-    selected_window: String,
+    hovered_client: Option<Client>,
     running_state: RunningState,
-    view: ViewState,
-    wl_state: WlState,
+    page: PageState,
+    window_options: OrPrompt<WindowOptions>,
+    select_by_list: OrPrompt<Rc<Vec<SelectWindowBy>>>,
+}
+
+impl Model {
+    fn new(
+        window_options: Option<WindowOptions>,
+        select_by_list: Option<Rc<Vec<SelectWindowBy>>>,
+    ) -> Self {
+        return Self {
+            hovered_client: None,
+            running_state: RunningState::default(),
+            page: PageState::default(),
+            window_options: match window_options {
+                Some(window_options) => OrPrompt::Args(window_options),
+                None => OrPrompt::Prompt,
+            },
+            select_by_list: match select_by_list {
+                Some(select_by_list) => OrPrompt::Args(select_by_list),
+                None => OrPrompt::Prompt,
+            },
+        };
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -32,153 +63,129 @@ enum RunningState {
     Done,
 }
 
-#[derive(PartialEq)]
-enum Message {
-    Select,
-    Quit,
-    //window_selector::create_window();
+#[derive(PartialEq, Eq, Debug)]
+pub struct WindowSelection {
+    pub client: Client,
+    pub window_options: WindowOptions,
+    pub select_by_list: Rc<Vec<SelectWindowBy>>,
 }
 
-pub fn tui_root() -> Result<Option<Client>> {
+pub fn app(
+    window_options: Option<WindowOptions>,
+    select_by_list: Option<Rc<Vec<SelectWindowBy>>>,
+) -> Result<Option<WindowSelection>> {
     tui::install_panic_hook();
     color_eyre::install()?;
-    let client_result = app();
 
-    tui::restore_terminal()?;
-    return client_result;
-}
-
-fn index_monitors_by_client_id(monitors: Monitors, clients: Clients) -> HashMap<Address, Monitor> {
-    return HashMap::<Address, Monitor>::from_iter(clients.iter().filter_map(|client| {
-        match monitors.iter().find(|monitor| {
-            client
-                .monitor
-                .is_some_and(|client_monitor_id| monitor.id == client_monitor_id)
-        }) {
-            Some(monitor) => Some((client.address.clone(), monitor.clone())),
-            None => None,
-        }
-    }));
-}
-fn index_client_id(clients: &Clients) -> HashMap<Address, Client> {
-    return HashMap::<Address, Client>::from_iter(
-        clients
-            .iter()
-            .map(|client| (client.address.clone(), client.clone())),
-    );
-}
-
-fn app() -> Result<Option<Client>> {
     let monitors = Monitors::get()?;
     let clients = Clients::get()?;
 
-    let window_select_inputs =
-        wayland::window_selector::create_state_and_region_bounds(&clients, &monitors);
-    let event_queue = wayland::window_selector::create_wayland_window_select();
+    let selection_result = render(clients, monitors, window_options, select_by_list);
 
-    let mapped_client_id_and_client = index_client_id(&clients);
-    let terminal = tui::init_terminal()?;
-
-    let render_result = render(
-        window_select_inputs,
-        event_queue,
-        mapped_client_id_and_client,
-        terminal,
-    )?;
-
-    if let Some(click_position) = render_result {
-        println!("Processing...");
-        let selected_client = clients.iter().find(|client| {
-            let click_x = click_position.0.trunc() as i16;
-            let click_y = click_position.1.trunc() as i16;
-            let x = client.at.0 < click_x && click_x < (client.at.0 + client.size.0);
-            let y = client.at.1 < click_y && click_y < (client.at.1 + client.size.1);
-            return x && y;
-        });
-        return Ok(match selected_client {
-            Some(selected_client) => Some(selected_client.clone()),
-            None => None,
-        });
-    }
-    return Ok(None);
+    tui::restore_terminal()?;
+    return selection_result;
 }
 
 fn view(model: &mut Model, frame: &mut Frame) {
-    // println!("Press <ESC> to quit.");
-    let span1 = "Select a window: ".bold();
-    let span2 = format!("{}", model.selected_window).bold();
-    let line = Line::from(vec![span1, span2]);
-    let text = Text::from(line);
-    frame.render_widget(Paragraph::new(text), frame.area());
+    match &model.page {
+        PageState::WindowSelect => select_window(&model.hovered_client, frame),
+    }
 }
 
-fn update(
-    model: &mut Model,
-    msg: String,
-    client_regions: Vec<ClientRegion>,
-    mapped_client_id_and_client: HashMap<Address, Client>,
-) -> Option<Message> {
-    model.selected_window = msg;
-    if let (Some(pointer_position), Some((pointer_monitor_id, _))) = (
-        model.wl_state.pointer_position,
-        model.wl_state.pointer_surface.clone(),
-    ) {
-        //dbg!(&pointer_monitor_id);
-        let hovered_client_region = client_regions.iter().find(|client| {
-            let pointer_x = pointer_position.0.trunc() as i16;
-            let pointer_y = pointer_position.1.trunc() as i16;
-            let x = client.at.0 < pointer_x && pointer_x < (client.at.0 + client.size.0);
-            let y = client.at.1 < pointer_y && pointer_y < (client.at.1 + client.size.1);
-            if let Some(client_monitor) = &client.monitor {
-                return x && y && client_monitor.to_string() == pointer_monitor_id;
+enum Messages {
+    ClientUpdate(Client),
+    RunningState(RunningState),
+}
+
+fn update(model: &mut Model, message: Option<Messages>) -> Option<()> {
+    if let Some(message) = message {
+        match message {
+            Messages::ClientUpdate(client) => {
+                model.hovered_client = Some(client.clone());
             }
-            return false;
-        });
-        let hovered_client = match hovered_client_region {
-            Some(hovered_client_region) => {
-                mapped_client_id_and_client.get(&hovered_client_region.client_id)
+            Messages::RunningState(running_state) => {
+                model.running_state = running_state;
             }
-            None => None,
-        };
-        model.selected_window = match hovered_client {
-            Some(client) => client.title.clone(),
-            None => "".to_string(),
         };
     }
-    /* match msg {
-        Message::Select => {}
-        Message::Quit => {
-            // You can handle cleanup and exit here
-            model.running_state = RunningState::Done;
-        }
-    }; */
     None
 }
 
 fn render(
-    (state, client_regions): (WlState, Vec<ClientRegion>),
-    mut event_queue: EventQueue<WlState>,
-    mapped_client_id_and_client: HashMap<Address, Client>,
-    mut terminal: Terminal<impl Backend>,
-) -> Result<Option<(f64, f64)>> {
-    let mut model = Model::default();
-    model.wl_state = state;
-    while model.wl_state.running {
-        event_queue
-            .blocking_dispatch(&mut model.wl_state)
-            .expect("window loop");
+    clients: Clients,
+    monitors: Monitors,
+    window_options: Option<WindowOptions>,
+    select_by_list: Option<Rc<Vec<SelectWindowBy>>>,
+) -> Result<Option<WindowSelection>> {
+    let mut model = Model::new(window_options, select_by_list);
 
-        update(
-            &mut model,
-            "None".to_string(),
-            client_regions.clone(),
-            mapped_client_id_and_client.clone(),
-        );
+    let mut terminal = tui::init_terminal().expect("unable to create terminal ui");
+    let mut window_select = wayland::window_selector::WindowSelect::new(clients, monitors);
+
+    while model.running_state == RunningState::Running {
+        if model.page == PageState::WindowSelect {
+            match window_select.update() {
+                Message::Done => {
+                    window_select.clean_up();
+                    if let (OrPrompt::Args(_), OrPrompt::Args(_), Some(_)) = (
+                        &model.select_by_list,
+                        &model.window_options,
+                        &model.hovered_client,
+                    ) {
+                        update(&mut model, Some(Messages::RunningState(RunningState::Done)));
+                    };
+                }
+                Message::HoveredClient(maybe_id) => {
+                    if let Some(id) = maybe_id {
+                        if let Ok(clients) = Clients::get() {
+                            if let Some(client) = clients
+                                .iter()
+                                .find(|client| client.address.to_string() == id.to_string())
+                            {
+                                update(&mut model, Some(Messages::ClientUpdate(client.clone())));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Ok(current_update) = handle_event(&model) {
+            update(&mut model, current_update);
+        }
 
         terminal.draw(|f| view(&mut model, f))?;
     }
+    if let (OrPrompt::Args(select_by_list), OrPrompt::Args(window_options), Some(client)) = (
+        model.select_by_list,
+        model.window_options,
+        model.hovered_client,
+    ) {
+        return Ok(Some(WindowSelection {
+            client,
+            window_options: window_options,
+            select_by_list: select_by_list,
+        }));
+    };
+    Ok(None)
+}
 
-    Ok(model.wl_state.pointer_position.clone())
+fn handle_event(_: &Model) -> color_eyre::Result<Option<Messages>> {
+    if event::poll(Duration::from_millis(16))? {
+        if let Event::Key(key) = event::read()? {
+            if key.kind == event::KeyEventKind::Press {
+                return Ok(handle_key(key));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn handle_key(key: event::KeyEvent) -> Option<Messages> {
+    match key.code {
+        KeyCode::Char('q') => Some(Messages::RunningState(RunningState::Done)),
+        _ => None,
+    }
 }
 
 mod tui {

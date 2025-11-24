@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(about, long_about = None)]
@@ -17,20 +17,27 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
+#[derive(Clone, ValueEnum)]
+pub enum SelectWindowBy {
+    Title,
+    Class,
+    InitialClass,
+    InitialTitle,
+}
 
 #[derive(Subcommand)]
 pub enum Commands {
     Generate {
-        #[arg(long, help = "add float rule")]
+        #[arg(long, help = "add float rule", conflicts_with = "tile")]
         float: bool,
 
-        #[arg(long, help = "add persistentsize rule")]
-        persistentsize: bool,
-
-        #[arg(long, help = "add tile rule")]
+        #[arg(long, help = "add tile rule", conflicts_with = "float")]
         tile: bool,
 
         #[arg(long, help = "add fullscreen rule")]
         fullscreen: bool,
+
+        #[arg(long, help = "name of value to use in the windowrule query")]
+        select_by: Vec<SelectWindowBy>,
     },
 }

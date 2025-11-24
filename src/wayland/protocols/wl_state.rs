@@ -22,7 +22,7 @@ delegate_noop!(State: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 delegate_noop!(State: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
 delegate_noop!(State: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct State {
     pub running: bool,
     pub buffer_surfaces: HashMap<String, BufferSurface>,

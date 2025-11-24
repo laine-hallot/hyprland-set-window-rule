@@ -18,9 +18,7 @@ use ratatui::{
 };
 
 use clap::Parser;
-
 fn main() -> Result<()> {
-    system_info::get_data_dir();
     //window_selector::create_window();
     let cli = Cli::parse();
 
@@ -38,16 +36,11 @@ fn main() -> Result<()> {
     let cmd_result = match &cli.command {
         Some(Commands::Generate {
             float,
-            persistentsize,
             tile,
             fullscreen,
+            select_by,
         }) => {
-            return shell_command::commands::generate::exec(
-                float.clone(),
-                persistentsize.clone(),
-                tile.clone(),
-                fullscreen.clone(),
-            );
+            return shell_command::commands::generate::exec(&float, &tile, &fullscreen, &select_by);
         }
         None => Err(Error::msg("Unknown option")),
     };

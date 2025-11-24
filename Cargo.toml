@@ -4,11 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bytes = "1.11.0"
 clap = { version = "4.5.51", features = ["derive", "cargo", "env", "string"] }
 color-eyre = "0.6.5"
 crossterm = "0.29.0"
 directories = "6.0.0"
 hyprland = "0.4.0-beta.3"
+hyprlang = { version = "0.2.0", features = ["hyprland", "mutation"] }
 ratatui = "0.29.0"
 regex = "1.12.2"
 serde = "1.0.228"
@@ -19,3 +21,13 @@ wayland-backend = "0.3.11"
 wayland-client = "0.31.11"
 wayland-protocols = { version = "0.32.9", features = ["staging", "client", "unstable", "server"] }
 wayland-protocols-wlr = { version = "0.3.9", features = ["client"] }
+
+[build-dependencies]
+patch-crate = "0.1"
+
+
+[package.metadata.patch]
+crates = ["hyprlang"]
+
+[patch.crates-io]
+hyprlang = { path="./target/patch/hyprlang-0.2.0" }

@@ -1,5 +1,8 @@
 // TODO: Deal with this is copy pasted Ratatui boilerplate
 fn main() {
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    patch_crate::run().expect("Failed while patching");
+
     let git_output = std::process::Command::new("git")
         .args(["rev-parse", "--git-dir"])
         .output()

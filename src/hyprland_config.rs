@@ -1,94 +1,75 @@
-use std::{
-    fmt::{Display, Error, Formatter, Result as FmtResult},
-    num::ParseIntError,
-    str::FromStr,
-};
-
-use crate::system_info;
-use color_eyre::eyre;
+use color_eyre::Result;
 use hyprland::data::Client;
+use hyprlang::Hyprland;
+use regex::Regex;
+use std::{fs, path::Path, rc::Rc};
 
-enum WindowMode {
-    Tile,
+use crate::system_info::get_window_rules_dir;
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum SelectWindowBy {
+    Title,
+    Class,
+    InitialClass,
+    InitialTitle,
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum WindowPlacement {
     Float,
+    Tile,
+}
+#[derive(PartialEq, Eq, Debug)]
+pub struct WindowOptions {
+    pub window_placement: WindowPlacement,
+    pub fullscreen: bool,
 }
 
-impl ToString for WindowMode {
-    fn to_string(&self) -> String {
-        match self {
-            Self::Float => "float".to_string(),
-            Self::Tile => "tile".to_string(),
-        }
-    }
-}
+pub fn create_window_rule_config(
+    client: Client,
+    cli_options: &WindowOptions,
+    select_by_list: Rc<Vec<SelectWindowBy>>,
+) -> Result<()> {
+    // Create Hyprland config (handlers auto-registered)
+    let mut hypr = Hyprland::new();
+    let config = hypr.config_mut();
 
-enum Parameter {
-    Class(String),
-    Title(String),
-    InitialClass(String),
-    InitialTitle(String),
-}
+    let window_position = match cli_options.window_placement {
+        WindowPlacement::Float => "float",
+        WindowPlacement::Tile => "tile",
+    };
 
-impl ToString for Parameter {
-    fn to_string(&self) -> String {
-        match self {
-            Self::Class(class) => class.clone(),
-            Self::Title(title) => title.clone(),
-            Self::InitialClass(initial_class) => initial_class.clone(),
-            Self::InitialTitle(initial_title) => initial_title.clone(),
-        }
-    }
-}
+    let selector = select_by_list
+        .iter()
+        .map(|select_by| match select_by {
+            SelectWindowBy::Title => format!("title:({})", client.title),
+            SelectWindowBy::Class => format!("class:({})", client.class),
+            SelectWindowBy::InitialClass => format!("initialClass:({})", client.initial_class),
+            SelectWindowBy::InitialTitle => format!("initialTitle:({})", client.initial_title),
+        })
+        .collect::<Vec<String>>()
+        .join(", ");
 
-struct WindowRule {
-    mode: WindowMode,
-    parameters: Vec<Parameter>,
-}
+    config.set_string("windowrule", format!("{window_position}, {selector}"));
 
-impl Display for WindowRule {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let parameters = self
-            .parameters
-            .iter()
-            .map(|param| param.to_string())
-            .collect::<Vec<String>>()
-            .join("\n");
+    let regex = Regex::new(r"(?m)\W+").unwrap();
+    let name = format!(
+        "{:.8}-{:.8}.conf",
+        regex.replace_all(&client.title, ""),
+        regex.replace_all(&client.class, "")
+    );
 
-        return write!(f, "windowrule = {}, {}", self.mode.to_string(), parameters,);
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParseRuleError {
-    /// The string does not follow the expected “x,y wxh” layout.
-    InvalidFormat,
-    /// One of the integer components could not be parsed.
-    InvalidNumber(ParseIntError),
-}
-
-impl std::fmt::Display for ParseRuleError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        match self {
-            ParseRuleError::InvalidFormat => write!(f, "invalid region format"),
-            ParseRuleError::InvalidNumber(e) => write!(f, "invalid number: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for ParseRuleError {}
-
-impl From<ParseIntError> for ParseRuleError {
-    fn from(err: ParseIntError) -> Self {
-        ParseRuleError::InvalidNumber(err)
-    }
-}
-
-pub fn generate_config_for(client: &Client) -> eyre::Result<()> {
-    let hyprland_dir = system_info::get_hyprland_dir()?;
-
-    if hyprland_dir.join("").exists() {
-        // check for existing rule file for client
+    let window_rules_path = get_window_rules_dir()?;
+    if !fs::exists(&window_rules_path)? {
+        fs::create_dir_all(&window_rules_path)?;
     }
 
-    return Ok(());
+    let file_path = Path::join(&window_rules_path, name);
+    println!(
+        "Writing \"windowrule {window_position}, {selector}\" to {}",
+        file_path.to_string_lossy()
+    );
+    config.save_as(file_path)?;
+
+    Ok(())
 }

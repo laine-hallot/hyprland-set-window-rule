@@ -12,11 +12,14 @@
 
 ## Usage
 
+### Prerequisite
+
+1. Add `source = window-rules/*` somewhere in your hyprland config file so that the rules you generate actually get used
+
 This is very unfinished so right now you can only generate a rule to make a window float based on its initial title.
 
-1. `hyprland-window-rule generate --float`
+1. `hyprland-window-rule generate --float  --select-by title  --select-by initial-class`
 1. Select a window with you mouse cursor
-1. Copy the output into your hyprland config
 
 ## Know Issues
 

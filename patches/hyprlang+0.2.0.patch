@@ -1,0 +1,113 @@
+diff --git a/src/config.rs b/src/config.rs
+index 1c04e28..c4903e0 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
+ use std::rc::Rc;
+ 
+ /// Main configuration manager
++#[derive(Debug)]
+ pub struct Config {
+     /// Configuration values: category_path:key -> value
+     values: HashMap<String, ConfigValueEntry>,
+diff --git a/src/expressions.rs b/src/expressions.rs
+index 54f5d8a..56f198d 100644
+--- a/src/expressions.rs
++++ b/src/expressions.rs
+@@ -2,6 +2,7 @@ use crate::error::{ConfigError, ParseResult};
+ use std::collections::HashMap;
+ 
+ /// Expression evaluator for arithmetic expressions
++#[derive(Debug)]
+ pub struct ExpressionEvaluator {
+     variables: HashMap<String, i64>,
+ }
+diff --git a/src/features.rs b/src/features.rs
+index 36652a4..4c41160 100644
+--- a/src/features.rs
++++ b/src/features.rs
+@@ -3,6 +3,7 @@ use crate::variables::VariableManager;
+ use std::path::{Path, PathBuf};
+ 
+ /// Directive processor for handling comment directives
++#[derive(Debug)]
+ pub struct DirectiveProcessor {
+     /// Stack of active if conditions
+     if_stack: Vec<bool>,
+@@ -105,6 +106,7 @@ impl Default for DirectiveProcessor {
+ }
+ 
+ /// Source file resolver for handling source directives
++#[derive(Debug)]
+ pub struct SourceResolver {
+     /// Base directory for resolving relative paths
+     base_dir: PathBuf,
+diff --git a/src/handlers.rs b/src/handlers.rs
+index dae9b93..a691fa3 100644
+--- a/src/handlers.rs
++++ b/src/handlers.rs
+@@ -122,6 +122,7 @@ pub enum HandlerScope {
+ }
+ 
+ /// Manager for keyword handlers
++#[derive(Debug)]
+ pub struct HandlerManager {
+     /// Global handlers
+     global_handlers: HashMap<String, Box<dyn Handler>>,
+diff --git a/src/hyprland.rs b/src/hyprland.rs
+index 1ada681..475156e 100644
+--- a/src/hyprland.rs
++++ b/src/hyprland.rs
+@@ -364,6 +364,7 @@ use std::collections::HashMap;
+ use std::path::Path;
+ 
+ /// Wrapper around a special category instance with convenient value accessors
++#[derive(Debug)]
+ pub struct RuleInstance<'a> {
+     values: HashMap<String, &'a ConfigValue>,
+ }
+@@ -438,6 +439,7 @@ impl<'a> RuleInstance<'a> {
+ /// }
+ /// # }
+ /// ```
++#[derive(Debug)]
+ pub struct Hyprland {
+     config: Config,
+ }
+diff --git a/src/lib.rs b/src/lib.rs
+index 50bbdba..c335926 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -166,7 +166,7 @@ pub use variables::VariableManager;
+ 
+ // Feature-gated exports
+ #[cfg(feature = "hyprland")]
+-pub use hyprland::Hyprland;
++pub use hyprland::{Hyprland, RuleInstance};
+ 
+ #[cfg(feature = "mutation")]
+ pub use document::{ConfigDocument, DocumentNode, NodeLocation, NodeType};
+diff --git a/src/special_categories.rs b/src/special_categories.rs
+index 6fff211..22605f5 100644
+--- a/src/special_categories.rs
++++ b/src/special_categories.rs
+@@ -106,6 +106,7 @@ impl SpecialCategoryInstance {
+ }
+ 
+ /// Manager for special categories
++#[derive(Debug)]
+ pub struct SpecialCategoryManager {
+     /// Descriptors for all registered special categories
+     descriptors: HashMap<String, SpecialCategoryDescriptor>,
+diff --git a/src/variables.rs b/src/variables.rs
+index 2a93e55..fcda274 100644
+--- a/src/variables.rs
++++ b/src/variables.rs
+@@ -2,6 +2,7 @@ use crate::error::{ConfigError, ParseResult};
+ use std::collections::{HashMap, HashSet};
+ 
+ /// Variable storage and resolution system
++#[derive(Debug)]
+ pub struct VariableManager {
+     /// User-defined variables
+     variables: HashMap<String, String>,
